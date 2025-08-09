@@ -1,0 +1,467 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Throne Chess — 3D Cartoon (Medium AI)</title>
+<style>
+  :root{
+    --board-size: min(96vmin, 760px);
+    --light: #e9d9b8;
+    --dark: #6b4f2b;
+    --accent: #caa15a;
+  }
+  body{
+    margin:0;
+    font-family: "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    background: linear-gradient(180deg,#1d1f26 0%, #0f1113 100%);
+    color:#fff;
+    display:flex;
+    min-height:100vh;
+    align-items:center;
+    justify-content:center;
+    padding:16px;
+  }
+  .container{
+    width:var(--board-size);
+    max-width:100%;
+  }
+  .header{
+    display:flex;
+    justify-content:space-between;
+    align-items:center;
+    margin-bottom:12px;
+  }
+  h1{ font-size:1.1rem; margin:0; color:var(--accent);}
+  .controls{ display:flex; gap:8px; align-items:center;}
+  .btn{
+    background:#222; color:#fff; border:1px solid rgba(255,255,255,0.06);
+    padding:8px 10px; border-radius:8px; font-size:0.92rem;
+  }
+  .status{ font-size:0.95rem; opacity:0.9; margin-left:8px; }
+
+  /* Board container */
+  .board-wrap{
+    background: linear-gradient(180deg,#b99a66 0%, #8b6b3a 100%);
+    padding:14px; border-radius:20px;
+    box-shadow: 0 18px 40px rgba(0,0,0,0.6), inset 0 8px 12px rgba(255,255,255,0.06);
+  }
+
+  .board{
+    width:100%; aspect-ratio:1/1;
+    display:grid;
+    grid-template-columns: repeat(8,1fr);
+    gap:6px;
+    padding:10px;
+    background:
+      linear-gradient(145deg, rgba(255,255,255,0.06), rgba(0,0,0,0.15));
+    border-radius:12px;
+    box-shadow: 0 8px 20px rgba(0,0,0,0.45);
+    transform: perspective(800px) rotateX(8deg);
+  }
+
+  .square{
+    position:relative;
+    border-radius:8px;
+    overflow:visible;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    height:100%;
+    user-select:none;
+    touch-action: manipulation;
+  }
+
+  .square.light{
+    background: linear-gradient(180deg, rgba(255,255,255,0.06), rgba(0,0,0,0.02));
+    box-shadow: inset 0 6px 10px rgba(255,255,255,0.03);
+  }
+  .square.dark{
+    background: linear-gradient(180deg, rgba(0,0,0,0.08), rgba(0,0,0,0.35));
+    box-shadow: inset 0 -6px 10px rgba(0,0,0,0.15);
+  }
+
+  /* 3D piece style container */
+  .piece{
+    width:78%;
+    height:78%;
+    display:flex; align-items:center; justify-content:center;
+    border-radius:999px;
+    box-shadow: 0 10px 18px rgba(0,0,0,0.45), inset 0 2px 6px rgba(255,255,255,0.04);
+    transform: translateZ(8px);
+    transition: transform 120ms ease, box-shadow 120ms;
+    touch-action:none;
+  }
+  .piece.white{ background: linear-gradient(180deg,#fff,#e6e6e6); color:#222; }
+  .piece.black{ background: linear-gradient(180deg,#2b2b2b,#0f0f0f); color:#fff; }
+
+  .piece:active{ transform: translateZ(4px) scale(0.98); box-shadow: 0 6px 12px rgba(0,0,0,0.5);}
+
+  .label{
+    position:absolute; bottom:6px; left:6px; font-size:10px; color:rgba(255,255,255,0.6);
+  }
+
+  /* Highlighting */
+  .square.highlight{ outline: 3px solid rgba(202,161,90,0.9); outline-offset: -3px; }
+  .square.target{ box-shadow: 0 10px 30px rgba(202,161,90,0.14), inset 0 6px 10px rgba(255,255,255,0.03); }
+
+  /* Footer */
+  .footer{ margin-top:12px; display:flex; align-items:center; justify-content:space-between; gap:8px;}
+  .note{ font-size:0.85rem; opacity:0.8; }
+
+  /* Responsive */
+  @media (max-width:520px){
+    .header{ flex-direction:column; align-items:flex-start; gap:8px;}
+    h1{ font-size:1rem;}
+  }
+</style>
+</head>
+<body>
+  <div class="container" id="app">
+    <div class="header">
+      <h1>Throne Chess — 3D Cartoon (Medium AI)</h1>
+      <div class="controls">
+        <button class="btn" id="newBtn">New Game</button>
+        <button class="btn" id="undoBtn">Undo</button>
+        <div class="status" id="status">White to move</div>
+      </div>
+    </div>
+
+    <div class="board-wrap">
+      <div class="board" id="board"></div>
+    </div>
+
+    <div class="footer">
+      <div class="note">Tap a piece, then tap a square. Promotion => Queen automatically.</div>
+      <div style="opacity:0.9;">Limitations: no castling, no en-passant</div>
+    </div>
+  </div>
+
+<script>
+/*
+  Lightweight in-file chess implementation.
+  - Board represented as 8x8 array (rank 8 at top row).
+  - Piece encoding: 'P','N','B','R','Q','K' for white; lowercase for black.
+  - No castling, no en-passant.
+  - Promotion auto -> Q.
+  - Medium AI: minimax with alpha-beta, depth up to 3.
+*/
+
+// --- Utilities ---
+const files = ['a','b','c','d','e','f','g','h'];
+function coordToIndex(file, rank){ return (8 - rank) * 8 + files.indexOf(file); }
+function idxToFileRank(i){
+  const r = 8 - Math.floor(i/8);
+  const f = files[i%8];
+  return f + r.toString();
+}
+function cloneBoard(b){ return b.slice(); }
+function pieceColor(p){ if(!p) return null; return p === p.toUpperCase() ? 'w' : 'b'; }
+function isUpper(p){ return p && p === p.toUpperCase(); }
+function isLower(p){ return p && p === p.toLowerCase(); }
+
+// --- Initial Setup (standard) ---
+const START_FEN = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR";
+function fenToBoard(fen){
+  let board = new Array(64).fill(null);
+  const parts = fen.split(' ')[0].split('/');
+  for(let r=0;r<8;r++){
+    let file = 0;
+    for(const ch of parts[r]){
+      if(/\d/.test(ch)){
+        file += parseInt(ch);
+      } else {
+        board[r*8 + file] = ch;
+        file++;
+      }
+    }
+  }
+  return board;
+}
+
+let board = fenToBoard(START_FEN);
+let turn = 'w'; // 'w' or 'b'
+let selected = null;
+let highlights = [];
+let history = [];
+
+// Piece values and simple PST (piece-square tweaks)
+const PIECE_VALUES = { 'p':100, 'n':320, 'b':330, 'r':500, 'q':900, 'k':20000 };
+const PST = {
+  p: [ 0,0,0,0,0,0,0,0,
+       50,50,50,50,50,50,50,50,
+       10,10,20,30,30,20,10,10,
+        5,5,10,25,25,10,5,5,
+        0,0,0,20,20,0,0,0,
+        5,-5,-10,0,0,-10,-5,5,
+        5,10,10,-20,-20,10,10,5,
+        0,0,0,0,0,0,0,0 ],
+  n: [-50,-40,-30,-30,-30,-30,-40,-50,
+       -40,-20,0,0,0,0,-20,-40,
+       -30,0,10,15,15,10,0,-30,
+       -30,5,15,20,20,15,5,-30,
+       -30,0,15,20,20,15,0,-30,
+       -30,5,10,15,15,10,5,-30,
+       -40,-20,0,5,5,0,-20,-40,
+       -50,-40,-30,-30,-30,-30,-40,-50],
+  b: [-20,-10,-10,-10,-10,-10,-10,-20,
+       -10,0,0,0,0,0,0,-10,
+       -10,0,5,10,10,5,0,-10,
+       -10,5,5,10,10,5,5,-10,
+       -10,0,10,10,10,10,0,-10,
+       -10,10,10,10,10,10,10,-10,
+       -10,5,0,0,0,0,5,-10,
+       -20,-10,-10,-10,-10,-10,-10,-20],
+  r: [0,0,0,5,5,0,0,0,
+      -5,0,0,0,0,0,0,-5,
+      -5,0,0,0,0,0,0,-5,
+      -5,0,0,0,0,0,0,-5,
+      -5,0,0,0,0,0,0,-5,
+      -5,0,0,0,0,0,0,-5,
+       5,10,10,10,10,10,10,5,
+       0,0,0,0,0,0,0,0],
+  q: [-20,-10,-10,-5,-5,-10,-10,-20,
+       -10,0,0,0,0,0,0,-10,
+       -10,0,5,5,5,5,0,-10,
+        -5,0,5,5,5,5,0,-5,
+         0,0,5,5,5,5,0,-5,
+       -10,5,5,5,5,5,0,-10,
+       -10,0,5,0,0,0,0,-10,
+       -20,-10,-10,-5,-5,-10,-10,-20],
+  k: [-30,-40,-40,-50,-50,-40,-40,-30,
+       -30,-40,-40,-50,-50,-40,-40,-30,
+       -30,-40,-40,-50,-50,-40,-40,-30,
+       -30,-40,-40,-50,-50,-40,-40,-30,
+       -20,-30,-30,-40,-40,-30,-30,-20,
+       -10,-20,-20,-20,-20,-20,-20,-10,
+        20,20,0,0,0,0,20,20,
+        20,30,10,0,0,10,30,20]
+};
+
+// --- Move generation (pseudo-legal, then we filter out moves that leave king in check) ---
+
+function inBounds(r,c){ return r>=0 && r<8 && c>=0 && c<8; }
+function rcToIdx(r,c){ return r*8 + c; }
+function idxToRc(i){ return [Math.floor(i/8), i%8]; }
+
+function generateMovesFor(boardState, side){
+  const moves = [];
+  for(let i=0;i<64;i++){
+    const p = boardState[i];
+    if(!p) continue;
+    const color = pieceColor(p);
+    if(color !== side) continue;
+    const [r,c] = idxToRc(i);
+    const piece = p.toLowerCase();
+    if(piece === 'p'){
+      const dir = (color==='w') ? -1 : 1;
+      const startRank = (color==='w') ? 6 : 1;
+      // one step
+      if(inBounds(r+dir,c) && !boardState[rcToIdx(r+dir,c)]) moves.push({from:i,to:rcToIdx(r+dir,c),piece:p});
+      // two steps
+      if(r===startRank && !boardState[rcToIdx(r+dir,c)] && !boardState[rcToIdx(r+2*dir,c)]) moves.push({from:i,to:rcToIdx(r+2*dir,c),piece:p});
+      // captures
+      for(const dc of [-1,1]){
+        const nr = r+dir, nc = c+dc;
+        if(inBounds(nr,nc)){
+          const t = boardState[rcToIdx(nr,nc)];
+          if(t && pieceColor(t)!==color) moves.push({from:i,to:rcToIdx(nr,nc),piece:p,capture:t});
+        }
+      }
+    } else if(piece === 'n'){
+      const deltas = [[-2,-1],[-2,1],[-1,-2],[-1,2],[1,-2],[1,2],[2,-1],[2,1]];
+      for(const [dr,dc] of deltas){
+        const nr=r+dr, nc=c+dc;
+        if(!inBounds(nr,nc)) continue;
+        const t = boardState[rcToIdx(nr,nc)];
+        if(!t || pieceColor(t)!==color) moves.push({from:i,to:rcToIdx(nr,nc),piece:p,capture:t});
+      }
+    } else if(piece === 'b' || piece === 'r' || piece === 'q'){
+      const dirs = (piece==='b')? [[-1,-1],[-1,1],[1,-1],[1,1]] : (piece==='r')? [[-1,0],[1,0],[0,-1],[0,1]] :
+                   [[-1,-1],[-1,1],[1,-1],[1,1],[-1,0],[1,0],[0,-1],[0,1]];
+      for(const [dr,dc] of dirs){
+        let nr=r+dr, nc=c+dc;
+        while(inBounds(nr,nc)){
+          const t = boardState[rcToIdx(nr,nc)];
+          if(!t) {
+            moves.push({from:i,to:rcToIdx(nr,nc),piece:p});
+          } else {
+            if(pieceColor(t)!==color) moves.push({from:i,to:rcToIdx(nr,nc),piece:p,capture:t});
+            break;
+          }
+          nr+=dr; nc+=dc;
+        }
+      }
+    } else if(piece === 'k'){
+      for(const dr of [-1,0,1]) for(const dc of [-1,0,1]){
+        if(dr===0 && dc===0) continue;
+        const nr=r+dr, nc=c+dc;
+        if(!inBounds(nr,nc)) continue;
+        const t = boardState[rcToIdx(nr,nc)];
+        if(!t || pieceColor(t)!==color) moves.push({from:i,to:rcToIdx(nr,nc),piece:p,capture:t});
+      }
+      // Note: castling not implemented
+    }
+  }
+  // filter moves that leave own king in check
+  const legal = [];
+  for(const m of moves){
+    const nb = applyMove(boardState,m);
+    if(!isKingAttacked(nb, turn)) legal.push(m);
+  }
+  return legal;
+}
+
+function applyMove(boardState, move){
+  const nb = cloneBoard(boardState);
+  const from = move.from, to = move.to;
+  nb[to] = nb[from];
+  nb[from] = null;
+  // promotion
+  const [tr,tc] = idxToRc(to);
+  if(nb[to] && nb[to].toLowerCase()==='p'){
+    if((isUpper(nb[to]) && tr===0) || (isLower(nb[to]) && tr===7)){
+      nb[to] = (isUpper(nb[to]) ? 'Q' : 'q'); // promote to queen
+    }
+  }
+  return nb;
+}
+
+function findKing(boardState, side){
+  for(let i=0;i<64;i++){
+    const p = boardState[i];
+    if(!p) continue;
+    if((side==='w' && p==='K') || (side==='b' && p==='k')) return i;
+  }
+  return -1;
+}
+
+function isKingAttacked(boardState, side){
+  // returns true if 'side' king is attacked by opponent
+  const kingIdx = findKing(boardState, side);
+  if(kingIdx === -1) return true; // no king -> attacked (shouldn't happen)
+  const opp = (side==='w') ? 'b' : 'w';
+  // generate opponent pseudo-moves and see if any capture king
+  for(let i=0;i<64;i++){
+    const p = boardState[i];
+    if(!p) continue;
+    if(pieceColor(p)!==opp) continue;
+    const [r,c]=idxToRc(i);
+    const piece=p.toLowerCase();
+    if(piece==='p'){
+      const dir = (opp==='w') ? -1 : 1;
+      for(const dc of [-1,1]){
+        const nr=r+dir, nc=c+dc;
+        if(inBounds(nr,nc) && rcToIdx(nr,nc)===kingIdx) return true;
+      }
+    } else if(piece==='n'){
+      const deltas = [[-2,-1],[-2,1],[-1,-2],[-1,2],[1,-2],[1,2],[2,-1],[2,1]];
+      for(const [dr,dc] of deltas){ const nr=r+dr, nc=c+dc; if(inBounds(nr,nc) && rcToIdx(nr,nc)===kingIdx) return true;}
+    } else if(['b','r','q'].includes(piece)){
+      const dirs = (piece==='b')? [[-1,-1],[-1,1],[1,-1],[1,1]] : (piece==='r')? [[-1,0],[1,0],[0,-1],[0,1]] :
+                   [[-1,-1],[-1,1],[1,-1],[1,1],[-1,0],[1,0],[0,-1],[0,1]];
+      for(const [dr,dc] of dirs){
+        let nr=r+dr, nc=c+dc;
+        while(inBounds(nr,nc)){
+          const idx = rcToIdx(nr,nc);
+          if(idx===kingIdx) return true;
+          if(boardState[idx]) break;
+          nr+=dr; nc+=dc;
+        }
+      }
+    } else if(piece==='k'){
+      for(const dr of [-1,0,1]) for(const dc of [-1,0,1]){ if(dr===0&&dc===0) continue; const nr=r+dr,nc=c+dc; if(inBounds(nr,nc) && rcToIdx(nr,nc)===kingIdx) return true; }
+    }
+  }
+  return false;
+}
+
+// --- Evaluation function ---
+function evaluate(boardState){
+  let score = 0;
+  for(let i=0;i<64;i++){
+    const p = boardState[i];
+    if(!p) continue;
+    const color = pieceColor(p);
+    const pp = p.toLowerCase();
+    const val = PIECE_VALUES[pp] || 0;
+    const pstVal = (PST[pp] && PST[pp][i])? PST[pp][i] : 0;
+    if(color==='w') score += val + pstVal;
+    else score -= val + pstVal;
+  }
+  return score;
+}
+
+// --- Minimax with alpha-beta ---
+function minimax(boardState, depth, alpha, beta, maximizingPlayer){
+  if(depth===0) return evaluate(boardState);
+  const side = maximizingPlayer ? 'w' : 'b';
+  const moves = generateMovesFor(boardState, side);
+  if(moves.length===0){
+    // no legal moves: checkmate or stalemate
+    const inCheck = isKingAttacked(boardState, side);
+    if(inCheck) return maximizingPlayer ? -999999 : 999999; // mate eval
+    else return 0; // stalemate
+  }
+  if(maximizingPlayer){
+    let maxEval = -Infinity;
+    for(const m of moves){
+      const nb = applyMove(boardState, m);
+      const val = minimax(nb, depth-1, alpha, beta, false);
+      if(val > maxEval) maxEval = val;
+      alpha = Math.max(alpha, val);
+      if(beta <= alpha) break;
+    }
+    return maxEval;
+  } else {
+    let minEval = Infinity;
+    for(const m of moves){
+      const nb = applyMove(boardState, m);
+      const val = minimax(nb, depth-1, alpha, beta, true);
+      if(val < minEval) minEval = val;
+      beta = Math.min(beta, val);
+      if(beta <= alpha) break;
+    }
+    return minEval;
+  }
+}
+
+function chooseBestMove(boardState, side){
+  const depth = 3; // medium strength
+  const moves = generateMovesFor(boardState, side);
+  if(moves.length===0) return null;
+  let best = null;
+  if(side==='b'){ // minimizing (we treat white positive)
+    let bestVal = Infinity;
+    for(const m of moves){
+      const nb = applyMove(boardState, m);
+      const val = minimax(nb, depth-1, -Infinity, Infinity, true);
+      if(val < bestVal){ bestVal = val; best = m; }
+    }
+  } else {
+    let bestVal = -Infinity;
+    for(const m of moves){
+      const nb = applyMove(boardState, m);
+      const val = minimax(nb, depth-1, -Infinity, Infinity, false);
+      if(val > bestVal){ bestVal = val; best = m; }
+    }
+  }
+  return best;
+}
+
+// --- Rendering & UI ---
+
+const boardEl = document.getElementById('board');
+const statusEl = document.getElementById('status');
+
+// Inline SVG cartoon icons for pieces (simple shapes representing theme)
+const SVG_PIECES = {
+  'P_white': `<svg viewBox="0 0 64 64" width="44" height="44" xmlns="http://www.w3.org/2000/svg">
+    <g fill="none" stroke="#3a3a3a" stroke-width="1"><ellipse cx="32" cy="50" rx="20" ry="6" fill="#fff" stroke="none"/>
+    <rect x="20" y="24" width="24" height="22" rx="8" fill="#fff"/>
+    <circle cx="32" cy="16" r="10" fill="#fff"/></g></svg>`,
+  'P_black': `<svg viewBox="0 0 64 64" width="44" height="44" xmlns="http://www.w3.org/2000/svg">
+    <g><ellipse cx="32" cy="50" rx="20" ry="6" fill="#222"/><rect x="20" y="24" width="24" height="22" rx="8" fill="#222"/><circle cx="32" cy="16" r="10" fill="#222"/></g></svg>`,
+  'R_white': `<svg viewBox="0 0 64 64" width="44" height="44"><g><rect x="16" y="22" width="32" height="22" rx="4" fill="#fff"/><rect x="20" y="12" width="8" height="8" rx="1" fill="#fff"/><rect x="36" y="12" width="8" height="8" rx="1" fill="#fff"/><rect x="28" y="10" width="8" height="8" rx="1" fill="#fff"/></g></svg>`,
+  'R_black': `<svg viewBox="0 0 64 64" width="44" height="44"><g><rect x="16" y="22" width="32" height="22" rx="4" fill="#111"/><rect x="20" y="12" width="8" height="8" rx="1" fill="#111"/><rect x="36" y="12" width="8" height="8" rx="1" fill="#111"/><rect x="28" y="10" width="8" height="8" rx="1" fill="#111"/></g></svg>`,
+  'N_white': `<svg viewBox="0 0 64 64" width="44" height="44"><g><path d="M20 44c6-8 12-8 20-12 8-4 8-12 3-16-6-5-18 2-
